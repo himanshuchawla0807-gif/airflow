@@ -61,17 +61,33 @@ class TestPodTemplateFile:
         [{}, {"airflowVersion": "3.2.2"}],
         ids=["chart-default", "airflow-3.2.2"],
     )
-    def test_should_not_add_metadata_database_env_to_task_container(self, version_values):
+    @pytest.mark.parametrize(
+        "kerberos_values",
+        [
+            {},
+            {"kerberosInitContainer": {"enabled": True}},
+            {"kerberosSidecar": {"enabled": True}},
+            {"kerberosInitContainer": {"enabled": True}, "kerberosSidecar": {"enabled": True}},
+        ],
+        ids=["disabled", "init", "sidecar", "both"],
+    )
+    def test_should_not_add_metadata_database_env_to_task_container(self, version_values, kerberos_values):
         docs = render_chart(
-            values={"executor": "KubernetesExecutor", **version_values},
+            values={
+                "executor": "KubernetesExecutor",
+                "kerberos": {"enabled": bool(kerberos_values)},
+                "workers": {"kubernetes": kerberos_values},
+                **version_values,
+            },
             show_only=["templates/pod-template-file.yaml"],
             chart_dir=self.temp_chart_dir,
         )
 
-        env_names = jmespath.search("spec.containers[0].env[*].name", docs[0])
-
-        assert "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN" not in env_names
-        assert "AIRFLOW_CONN_AIRFLOW_DB" not in env_names
+        pod_spec = docs[0]["spec"]
+        for container in pod_spec["containers"] + (pod_spec.get("initContainers") or []):
+            env_names = [env["name"] for env in container.get("env", [])]
+            assert "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN" not in env_names
+            assert "AIRFLOW_CONN_AIRFLOW_DB" not in env_names
 
     def test_should_add_an_init_container_if_git_sync_is_true(self):
         docs = render_chart(
